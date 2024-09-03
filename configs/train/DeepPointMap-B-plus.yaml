@@ -1,0 +1,131 @@
+# 简介 & 备注
+# DeepPointMap发行版基础变体，训练量增强
+
+# 基本参数，注：gpu_index use_ddp checkpoint 的非默认参数请在命令行直接传入
+name: DeepPointMap_statistic2
+version: v1.0
+mode: train
+num_workers: 16
+use_cuda: true
+
+# 数据集
+dataset:
+  - {
+      name: KITTI,
+      root: /root/dataset/KITTI_v4.0_SUMA_NoVisual,
+      scenes: [ '00', '01', '02', '03', '04', '05' ],
+      reader: { type: npz }
+  }
+  - {
+      name: KITTI_360,
+      root: /root/dataset/KITTI360_v4.0_NoVisual,
+      scenes: [
+        2013_05_28_drive_0000_sync,
+        2013_05_28_drive_0002_sync,
+        2013_05_28_drive_0003_sync,
+        2013_05_28_drive_0004_sync,
+        2013_05_28_drive_0005_sync,
+        2013_05_28_drive_0006_sync
+      ],
+      reader: { type: npz }
+  }
+  - {
+    name: KITTI_CARLA,
+    root: /root/dataset/KITTICarla_v4.0_NoVisual,
+    scenes: [ Town01, Town02, Town03, Town04, Town05, Town06, Town07 ],
+    reader: { type: npz }
+  }
+
+# 训练参数
+train:
+  auto_cast: false
+  log_cycle: 320
+  save_cycle: 1
+  # 第一阶段训练多尺度多来源配准
+  registration:
+    num_epochs: 15
+    batch_size: 1
+    distance: 20
+    fill: true
+    K_max: 32
+    map_size_max: 16
+    K_0: 2
+    K_mult: 2
+    mult_epoch: [ 2, 4, 7, 11 ]
+    optimizer:
+      type: AdamW
+      kwargs:
+        lr: 0.001
+        weight_decay: 0.0001
+    scheduler:
+      type: cosine
+      kwargs:
+        T_max: 14
+        eta_min: 0.00001
+  # 第二阶段训练回环检测
+  loop_detection:
+    num_epochs: 15
+    batch_size: 32
+    distance: 20
+    optimizer:
+      type: AdamW
+      kwargs:
+        lr: 0.001
+        weight_decay: 0.0001
+    scheduler:
+      type: cosine
+      kwargs:
+        T_max: 14
+        eta_min: 0.00001
+
+## loss
+loss:
+  tau: 0.1
+  offset_value: mahalanobis  # manhattan | euclidean | mahalanobis
+  eps_positive: 1.0
+  eps_offset: 2.0
+  lambda_p: 1.0
+  lambda_c: 0.1
+  lambda_o: 1.0
+
+## 数据变换 [!注意! 以下变换为从上至下按顺序执行，部分变换与执行顺序存在耦合，例如ToTensor必须且只能位于最后]
+transforms:
+  RandomShuffle: { p: 1.0 }
+  VoxelSample: { voxel_size: 0.3, retention: first }
+  DistanceSample: { min_dis: 1.0, max_dis: 60.0 }
+  RandomDrop: { max_ratio: 0.5, p: 1.0 }
+  RandomShield: { angle_range: [ 10, 150 ], dis_range: [ 2, 10 ], max_num: 3, p: 0.1 }
+  RandomSample: { num: 16384 }
+  RandomRT: { r_mean: 0, r_std: 3.1416, t_mean: 0, t_std: 3, p: 1.0, pair: false }
+  RandomPosJitter: { mean: 0, std: 0.005, p: 1.0 }
+  CoordinatesNormalization: { ratio: 60.0 }
+  ToTensor: { padding_to: 16384 }
+
+# 模型参数
+encoder:
+  npoint: [4096, 1024, 256, 64, 16]
+  radius_list: [ [ 0.05, 0.1 ], [ 0.1, 0.2 ], [ 0.2, 0.4, 0.4 ], [ 0.4, 0.8 ], [ 0.8, 1.6 ] ]
+  nsample_list: [ [ 32, 32 ], [ 32, 32 ], [ 32, 32, 32 ], [ 32, 32 ], [ 16, 16 ] ]
+  in_channel: 3
+  out_channel: 128
+  width: 16
+  expansion: 4
+  upsample_layers: 2
+  sample: [
+    { type: 'fps-t3d' },
+    { type: 'fps-t3d' },
+    { type: 'fps-t3d' },
+    { type: 'fps-t3d' },
+    { type: 'fps-t3d' },
+  ]
+  norm: LN
+  bias: True
+
+decoder:
+  in_channel: 128
+  model_channel: 256
+  attention_layers: 3
+
+# SlamSystem
+slam_system:
+  coor_scale: 60

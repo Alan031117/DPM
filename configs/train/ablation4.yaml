@@ -1,0 +1,143 @@
+# 简介 & 备注
+# DeepPointMap，消融实验4，关闭课程学习
+
+# 基本参数，注：gpu_index use_ddp checkpoint 的非默认参数请在命令行直接传入
+name: DeepPointMap
+version: v1.1
+num_workers: 8
+use_cuda: true
+
+# 数据集
+dataset:
+  - {
+      name: KITTI,
+      root: /root/dataset/KITTI_v4.0_SUMA_NoVisual,
+      scenes: ["00", "01", "02", "03", "04", "05"],
+      reader: { type: npz },
+    }
+
+# 训练参数
+train:
+  auto_cast: false
+  log_cycle: 320
+  save_cycle: 1
+  # 第一阶段训练多尺度多来源配准
+  registration:
+    num_epochs: 7
+    batch_size: 1
+    distance: 20
+    fill: true
+    K_max: 32
+    map_size_max: 16
+    K: 32
+    optimizer:
+      type: AdamW
+      kwargs:
+        lr: 0.0002
+        weight_decay: 0.00001
+    scheduler:
+      type: cosine
+      kwargs:
+        T_max: 6
+        eta_min: 0.000002
+  # 第二阶段训练回环检测
+  loop_detection:
+    num_epochs: 10
+    batch_size: 32
+    distance: 20
+    optimizer:
+      type: AdamW
+      kwargs:
+        lr: 0.001
+        weight_decay: 0.0001
+    scheduler:
+      type: cosine
+      kwargs:
+        T_max: 9
+        eta_min: 0.00001
+
+## loss
+loss:
+  tau: 0.1
+  offset_value: mahalanobis # manhattan | euclidean | mahalanobis
+  eps_positive: 1.0
+  eps_offset: 2.0
+  lambda_p: 1.0
+  lambda_c: 0.1
+  lambda_o: 1.0
+
+## 数据变换 [!注意! 以下变换为从上至下按顺序执行，部分变换与执行顺序存在耦合，例如ToTensor必须且只能位于最后]
+transforms:
+  RandomShuffle: { p: 1.0 }
+  VoxelSample: { voxel_size: 0.3, retention: first }
+  DistanceSample: { min_dis: 1.0, max_dis: 60.0 }
+  RandomDrop: { max_ratio: 0.5, p: 1.0 }
+  RandomShield: { angle_range: [10, 150], dis_range: [2, 10], max_num: 3, p: 0.1 }
+  RandomSample: { num: 16384 }
+  RandomRT: { r_mean: 0, r_std: 3.1416, t_mean: 0, t_std: 3, p: 1.0, pair: false }
+  RandomPosJitter: { mean: 0, std: 0.005, p: 1.0 }
+  CoordinatesNormalization: { ratio: 60.0 }
+  ToTensor: { padding_to: 16384, use_calib: true }
+
+# 模型参数
+encoder:
+  npoint: [4096, 1024, 256, 64, 16]
+  radius_list: [[0.05, 0.1], [0.1, 0.2], [0.2, 0.4, 0.4], [0.4, 0.8], [0.8, 1.6]]
+  nsample_list: [[32, 32], [32, 32], [32, 32, 32], [32, 32], [16, 16]]
+  in_channel: 3
+  out_channel: 128
+  width: 16
+  expansion: 4
+  upsample_layers: 2
+  sample:
+    [
+      { type: "fps-t3d" },
+      { type: "fps-t3d" },
+      { type: "fps-t3d" },
+      { type: "fps-t3d" },
+      { type: "fps-t3d" },
+    ]
+  norm: LN
+  bias: True
+
+decoder:
+  in_channel: 128
+  model_channel: 256
+  attention_layers: 3
+
+# SlamSystem
+slam_system:
+  # Overall
+  coor_scale: 60
+
+  # Odometer
+  odometer_candidates_num: 1
+  registration_sample_odometer: 0.5
+
+  # Mapping
+  edge_confidence_drop: 0.60
+  edge_rmse_drop: 0.50
+  max_continuous_drop_scan: 5
+  continuous_drop_scan_strategy: recover
+  key_frame_distance: auto
+
+  enable_s2m_adjust: true # original: backend_loop_m2m_adjust
+  registration_sample_mapping: 0.5
+
+  # Loop
+  enable_loop_closure: true # original: backend_loop_closure
+  loop_detection_gap: 0 # original: backend_loop_time_gap_min
+  loop_detection_transaction_gap: 10.0
+  loop_detection_trust_range: 3 # original: LOOP_NEAREST_GRAPH_DIST
+  loop_detection_gnss_distance: -1 # original: LOOP_MAX_GPS_DIST_THRESHOLD_MAX
+  loop_detection_pred_distance: 100.0 # original: backend_loop_pred_dist_max
+  loop_detection_rotation_min: 30.0 # original: backend_loop_pred_rot_min
+  loop_detection_translation_min: 10.0
+  loop_detection_prob_acpt_threshold: 0.7 # original: backend_loop_threshold
+  loop_detection_candidates_num: 1 # original: backend_loop_edge_per_scan
+  registration_sample_loop: 0.5
+
+  loop_detection_confidence_acpt_threshold: 0.6 # original: LOOP_VERIFY_CONFIDENCE
+  enable_global_optimization: true
+  global_optimization_gap: 0
+  # end
